@@ -1,0 +1,5 @@
+[
+  { "q": "What is the main thesis?", "expected": "high-level" },
+  { "q": "List two key claims and cite them.", "expected": "citations" },
+  { "q": "What is NOT mentioned?", "expected": "abstain" }
+]
