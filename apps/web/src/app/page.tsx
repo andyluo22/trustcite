@@ -10,6 +10,7 @@ type AskResponse = {
   abstained: boolean;
   trace: {
     retrieved: { chunk_id: string; score: number }[];
+    chunks_preview: { chunk_id: string; score: number; start: number; end: number; text: string }[];
     thresholds: { retrieve_min: number };
     timings_ms: Record<string, number>;
   };
@@ -120,6 +121,27 @@ export default function Home() {
               <pre className="mt-2 text-xs bg-gray-50 border rounded-lg p-3 overflow-auto h-[360px]">
                 {pretty || "No response yet."}
               </pre>
+
+              {resp && (
+                <div className="mt-4">
+                  <h3 className="text-sm font-medium">Retrieved evidence (top chunks)</h3>
+                  <div className="mt-2 space-y-2">
+                    {resp.trace.chunks_preview.map((c) => (
+                      <div key={c.chunk_id} className="border rounded-lg p-2 text-xs">
+                        <div className="flex items-center justify-between">
+                          <span className="font-mono">{c.chunk_id}</span>
+                          <span className="tabular-nums">score: {c.score.toFixed(3)}</span>
+                        </div>
+                        <div className="mt-1 text-[11px] text-gray-600">
+                          chars [{c.start}, {c.end})
+                        </div>
+                        <pre className="mt-2 whitespace-pre-wrap">{c.text}</pre>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
             </div>
           </section>
         </div>
