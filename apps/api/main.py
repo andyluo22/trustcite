@@ -9,7 +9,8 @@ from pydantic import BaseModel, Field
 
 from rag.embeddings import Embedder
 from rag.retrieval import DocIndexCache, retrieve_top_k
-from rag.answering import evidence_only_answer
+from rag.answering import evidence_only_answer, generate_cited_answer
+
 
 app = FastAPI(title="TrustCite API", version="0.2.0")
 
@@ -118,32 +119,88 @@ def ask(req: AskRequest):
             ),
         )
 
-    # Evidence-only answer (Day 2)
-    top = retrieved[0]
-    excerpt, cite_start, cite_end = evidence_only_answer(top)
+    # --- Day 3: generator answer (strict citations) ---
+    t_gen0 = time.perf_counter()
+    try:
+        out = generate_cited_answer(req.question, retrieved)
+        t_gen1 = time.perf_counter()
 
-    t1 = time.perf_counter()
-    return AskResponse(
-        answer=[
-            AnswerSentence(
-                sentence=excerpt,
-                citations=[
-                    Citation(
-                        chunk_id=top.chunk.chunk_id,
-                        start=cite_start,
-                        end=cite_end,
-                    )
-                ],
+        # Special: model says no evidence
+        if out.raw_model_text.strip() == "I don't know. [NO_EVIDENCE]":
+            t1 = time.perf_counter()
+            return AskResponse(
+                answer=[],
+                abstained=True,
+                trace=Trace(
+                    retrieved=trace_retrieved,
+                    chunks_preview=trace_preview,
+                    thresholds={"retrieve_min": retrieve_min},
+                    timings_ms={
+                        "retrieve": int((t_retrieve1 - t_retrieve0) * 1000),
+                        "generate": int((t_gen1 - t_gen0) * 1000),
+                        "total": int((t1 - t0) * 1000),
+                    },
+                ),
             )
-        ],
-        abstained=False,
-        trace=Trace(
-            retrieved=trace_retrieved,
-            chunks_preview=trace_preview,
-            thresholds={"retrieve_min": retrieve_min},
-            timings_ms={
-                "retrieve": int((t_retrieve1 - t_retrieve0) * 1000),
-                "total": int((t1 - t0) * 1000),
-            },
-        ),
-    )
+
+        # Enforce: if no sentences survived → fallback
+        if not out.sentences:
+            raise RuntimeError("No citable sentences survived enforcement")
+
+        answer_sentences: List[AnswerSentence] = []
+        for sent_text, cits in out.sentences:
+            answer_sentences.append(
+                AnswerSentence(
+                    sentence=sent_text,
+                    citations=[
+                        Citation(chunk_id=cid, start=s, end=e) for (cid, s, e) in cits
+                    ],
+                )
+            )
+
+        t1 = time.perf_counter()
+        return AskResponse(
+            answer=answer_sentences,
+            abstained=False,
+            trace=Trace(
+                retrieved=trace_retrieved,
+                chunks_preview=trace_preview,
+                thresholds={"retrieve_min": retrieve_min},
+                timings_ms={
+                    "retrieve": int((t_retrieve1 - t_retrieve0) * 1000),
+                    "generate": int((t_gen1 - t_gen0) * 1000),
+                    "total": int((t1 - t0) * 1000),
+                },
+            ),
+        )
+
+    except Exception:
+        # Fallback: Day-2 evidence-only answer (never break demo)
+        top = retrieved[0]
+        excerpt, cite_start, cite_end = evidence_only_answer(top)
+
+        t1 = time.perf_counter()
+        return AskResponse(
+            answer=[
+                AnswerSentence(
+                    sentence=excerpt,
+                    citations=[
+                        Citation(
+                            chunk_id=top.chunk.chunk_id,
+                            start=cite_start,
+                            end=cite_end,
+                        )
+                    ],
+                )
+            ],
+            abstained=False,
+            trace=Trace(
+                retrieved=trace_retrieved,
+                chunks_preview=trace_preview,
+                thresholds={"retrieve_min": retrieve_min},
+                timings_ms={
+                    "retrieve": int((t_retrieve1 - t_retrieve0) * 1000),
+                    "total": int((t1 - t0) * 1000),
+                },
+            ),
+        )

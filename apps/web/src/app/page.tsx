@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 type Citation = { chunk_id: string; start: number; end: number };
 type AnswerSentence = { sentence: string; citations: Citation[] };
@@ -24,6 +24,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [resp, setResp] = useState<AskResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -64,6 +65,15 @@ export default function Home() {
     );
   }
 
+  function jumpToSpan(start: number, end: number) {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(start, end);
+    // crude but works: scroll by estimating line height
+    // (good enough for Day 3)
+  }
+
   return (
     <main className="min-h-screen p-6">
       <div className="mx-auto max-w-6xl">
@@ -85,6 +95,7 @@ export default function Home() {
               </button>
             </div>
             <textarea
+              ref={textareaRef}
               value={documentText}
               onChange={(e) => setDocumentText(e.target.value)}
               className="mt-3 w-full h-[420px] border rounded-lg p-3 text-sm font-mono"
@@ -113,6 +124,44 @@ export default function Home() {
             {error && (
               <div className="mt-3 text-sm text-red-600 border border-red-200 bg-red-50 p-2 rounded-lg">
                 {error}
+              </div>
+            )}
+
+            {resp && (
+              <div className="mt-4 border rounded-xl p-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-medium">Final answer</h3>
+                  <div className="text-xs text-gray-500">
+                    {resp.abstained ? "abstained" : "answered"} ·{" "}
+                    {resp.trace.timings_ms?.total ?? "?"}ms
+                  </div>
+                </div>
+
+                {resp.abstained ? (
+                  <p className="mt-2 text-sm text-gray-600">
+                    Not enough evidence above the retrieval threshold.
+                  </p>
+                ) : (
+                  <div className="mt-2 space-y-2">
+                    {resp.answer.map((a, i) => (
+                      <div key={i} className="text-sm leading-relaxed">
+                        <span>{a.sentence}</span>
+                        <span className="ml-2 inline-flex gap-1">
+                          {a.citations.map((c, j) => (
+                            <button
+                              key={j}
+                              onClick={() => jumpToSpan(c.start, c.end)}
+                              className="text-xs px-2 py-0.5 rounded-full border hover:bg-gray-50 font-mono"
+                              title={`Jump to ${c.chunk_id} [${c.start}, ${c.end})`}
+                            >
+                              {c.chunk_id}
+                            </button>
+                          ))}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
