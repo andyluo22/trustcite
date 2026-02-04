@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List
+from typing import Any, Optional, Dict, List
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,8 +9,9 @@ from pydantic import BaseModel, Field
 
 from rag.embeddings import Embedder
 from rag.retrieval import DocIndexCache, retrieve_top_k
-from rag.answering import evidence_only_answer, generate_cited_answer
-
+from rag.answering import evidence_only_answer
+from rag.guardrails import sanitize_question, sanitize_document
+from rag.answering import generate_verified_answer
 
 app = FastAPI(title="TrustCite API", version="0.2.0")
 
@@ -50,10 +51,16 @@ class ChunkPreview(BaseModel):
     text: str
 
 class Trace(BaseModel):
-    retrieved: List[RetrievedChunk] = Field(default_factory=list)
-    chunks_preview: List[ChunkPreview] = Field(default_factory=list)
-    thresholds: Dict[str, float] = Field(default_factory=lambda: {"retrieve_min": 0.62})
-    timings_ms: Dict[str, int] = Field(default_factory=dict)
+    retrieved: List[RetrievedChunk]
+    chunks_preview: List[ChunkPreview]
+    thresholds: Dict[str, float]
+    timings_ms: Dict[str, int]
+
+    # Day 4 additions
+    fallback_used: bool = False
+    dropped_sentences: int = 0
+    verification_scores: List[float] = []
+    sanitized: Dict[str, bool] = {}
 
 class AskResponse(BaseModel):
     answer: List[AnswerSentence]
@@ -75,13 +82,19 @@ def health():
 def ask(req: AskRequest):
     t0 = time.perf_counter()
 
+    q_san = sanitize_question(req.question)
+    d_san = sanitize_document(req.document_text)
+
+    question = q_san.text
+    document_text = req.document_text  # keep RAW so offsets match the UI text
+
     retrieve_min = 0.62
     top_k = 5
 
     t_retrieve0 = time.perf_counter()
     retrieved = retrieve_top_k(
-        question=req.question,
-        document_text=req.document_text,
+        question=question,
+        document_text=document_text, # use raw doc for now
         embedder=EMBEDDER,
         cache=CACHE,
         k=top_k,
@@ -119,10 +132,15 @@ def ask(req: AskRequest):
             ),
         )
 
-    # --- Day 3: generator answer (strict citations) ---
+# --- Day 4: generator answer (citations + verification) ---
     t_gen0 = time.perf_counter()
     try:
-        out = generate_cited_answer(req.question, retrieved)
+        out = generate_verified_answer(
+            question,
+            retrieved,
+            verify_min_score=0.40,
+        )
+        
         t_gen1 = time.perf_counter()
 
         # Special: model says no evidence
@@ -144,16 +162,20 @@ def ask(req: AskRequest):
             )
 
         # Enforce: if no sentences survived → fallback
-        if not out.sentences:
-            raise RuntimeError("No citable sentences survived enforcement")
-
+        if not out.verified:
+            raise RuntimeError("No sentences survived verification")
+        
         answer_sentences: List[AnswerSentence] = []
-        for sent_text, cits in out.sentences:
+        verification_scores = []
+
+        for vs in out.verified:
+            verification_scores.append(vs.best_score)
             answer_sentences.append(
                 AnswerSentence(
-                    sentence=sent_text,
+                    sentence=vs.sentence,
                     citations=[
-                        Citation(chunk_id=cid, start=s, end=e) for (cid, s, e) in cits
+                        Citation(chunk_id=c.chunk_id, start=c.start, end=c.end)
+                        for c in vs.citations
                     ],
                 )
             )
@@ -162,16 +184,20 @@ def ask(req: AskRequest):
         return AskResponse(
             answer=answer_sentences,
             abstained=False,
-            trace=Trace(
+            trace = Trace(
                 retrieved=trace_retrieved,
                 chunks_preview=trace_preview,
-                thresholds={"retrieve_min": retrieve_min},
+                thresholds={"retrieve_min": retrieve_min, "verify_min": 0.40},
                 timings_ms={
                     "retrieve": int((t_retrieve1 - t_retrieve0) * 1000),
                     "generate": int((t_gen1 - t_gen0) * 1000),
                     "total": int((t1 - t0) * 1000),
                 },
-            ),
+                fallback_used=False,
+                dropped_sentences=out.dropped_sentences,
+                verification_scores=verification_scores,
+                sanitized={"question": q_san.changed, "document": d_san.changed},
+            )
         )
 
     except Exception:
@@ -197,10 +223,14 @@ def ask(req: AskRequest):
             trace=Trace(
                 retrieved=trace_retrieved,
                 chunks_preview=trace_preview,
-                thresholds={"retrieve_min": retrieve_min},
+                thresholds={"retrieve_min": retrieve_min, "verify_min": 0.40},
                 timings_ms={
                     "retrieve": int((t_retrieve1 - t_retrieve0) * 1000),
                     "total": int((t1 - t0) * 1000),
                 },
+                fallback_used=True,
+                dropped_sentences=0,
+                verification_scores=[],
+                sanitized={"question": q_san.changed, "document": d_san.changed},
             ),
         )

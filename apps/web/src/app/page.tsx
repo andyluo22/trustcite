@@ -79,7 +79,7 @@ export default function Home() {
       <div className="mx-auto max-w-6xl">
         <h1 className="text-3xl font-semibold tracking-tight">TrustCite</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Trustworthy long-document QA with per-sentence citations + abstain + trace.
+          Trustworthy long-document QA with per-sentence citations with abstain and trace.
         </p>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
@@ -131,9 +131,19 @@ export default function Home() {
               <div className="mt-4 border rounded-xl p-3">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-medium">Final answer</h3>
-                  <div className="text-xs text-gray-500">
-                    {resp.abstained ? "abstained" : "answered"} ·{" "}
-                    {resp.trace.timings_ms?.total ?? "?"}ms
+                  <div className="text-xs text-gray-500 flex items-center gap-2">
+                    <span>{resp.abstained ? "abstained" : "answered"} · {resp.trace.timings_ms?.total ?? "?"}ms</span>
+                    {resp.trace.fallback_used && (
+                      <span className="px-2 py-0.5 rounded-full border text-[11px]">fallback</span>
+                    )}
+                    {(resp.trace.dropped_sentences ?? 0) > 0 && (
+                      <span className="px-2 py-0.5 rounded-full border text-[11px]">
+                        dropped {resp.trace.dropped_sentences}
+                      </span>
+                    )}
+                    {(resp.trace.sanitized?.question || resp.trace.sanitized?.document) && (
+                      <span className="px-2 py-0.5 rounded-full border text-[11px]">sanitized</span>
+                    )}
                   </div>
                 </div>
 
