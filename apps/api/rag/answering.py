@@ -72,15 +72,12 @@ def generate_verified_answer(
     question: str,
     retrieved: List[Retrieved],
     *,
-    sanitize_doc_full_text: str | None = None,
     verify_min_score: float = 0.40,
 ) -> AnswerOut:
     q_san = sanitize_question(question)
 
-    d_san_changed = False
-    if sanitize_doc_full_text is not None:
-        d_san = sanitize_document(sanitize_doc_full_text)
-        d_san_changed = d_san.changed
+    evidence_text = "\n\n".join(r.chunk.text for r in retrieved)
+    d_san = sanitize_document(evidence_text)
 
     prompt = build_cited_prompt(q_san.text, retrieved)
     raw = ollama_generate(prompt)
@@ -93,6 +90,6 @@ def generate_verified_answer(
         verified=verified,
         raw_model_text=raw,
         sanitized_question=q_san.changed,
-        sanitized_document=d_san_changed,
+        sanitized_document=d_san.changed,
         dropped_sentences=dropped,
     )

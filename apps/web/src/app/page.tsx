@@ -1,210 +1,260 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 
-type Citation = { chunk_id: string; start: number; end: number };
-type AnswerSentence = { sentence: string; citations: Citation[] };
+import { DocPanel } from "./components/DocPanel";
+import { DocViewer } from "./components/DocViewer";
+import { AskPanel } from "./components/AskPanel";
+import { AnswerPanel } from "./components/AnswerPanel";
+import { InspectRunPanel } from "./components/InspectRunPanel";
+import { Background } from "./components/Background";
 
-type AskResponse = {
-  answer: AnswerSentence[];
-  abstained: boolean;
-  trace: {
-    retrieved: { chunk_id: string; score: number }[];
-    chunks_preview: { chunk_id: string; score: number; start: number; end: number; text: string }[];
-    thresholds: { retrieve_min: number };
-    timings_ms: Record<string, number>;
-  };
-};
+import { ask } from "./lib/api";
+import type { AskResponse, Citation } from "./lib/types";
+import { loadDocs, saveDocs, type SavedDoc } from "./lib/storage";
+
+function demoDocText() {
+  return (
+    `TrustCite Demo Doc\n\n` +
+    `This system answers questions only using the provided document.\n` +
+    `If it cannot find evidence, it will abstain.\n\n` +
+    `Vancouver is a coastal city in British Columbia. It is known for its film industry.\n\n` +
+    `This is a tiny demo doc for Day 5.`
+  );
+}
+
+function makeId() {
+  // Works in modern browsers; fallback keeps you safe.
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `doc_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
 
 export default function Home() {
-  const [documentText, setDocumentText] = useState(
-    "Vancouver is a coastal city in British Columbia. It is known for its film industry.\n\nThis is a tiny demo doc for Day 1."
-  );
+  // --- Document store (localStorage) ---
+  const [docs, setDocs] = useState<SavedDoc[]>([]);
+  const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
+
+  // This is the *active* document text you send to backend.
+  const [documentText, setDocumentText] = useState<string>(demoDocText());
+
+  // UI mode: Edit (textarea) vs Viewer (highlight span)
+  const [editMode, setEditMode] = useState<boolean>(true);
+
+  // --- Asking ---
   const [question, setQuestion] = useState("What is Vancouver known for?");
   const [loading, setLoading] = useState(false);
   const [resp, setResp] = useState<AskResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+  // Active citation to highlight in viewer
+  const [activeCitation, setActiveCitation] = useState<Citation | null>(null);
 
-  const pretty = useMemo(() => (resp ? JSON.stringify(resp, null, 2) : ""), [resp]);
+  // cancels network requests currently in flight
+  const abortRef = useRef<AbortController | null>(null);
+
+  // Load docs on mount
+  useEffect(() => {
+    const loaded = loadDocs();
+    setDocs(loaded);
+
+    if (loaded.length > 0) {
+      setSelectedDocId(loaded[0].id);
+      setDocumentText(loaded[0].text);
+      setEditMode(false); // nice UX: if you have docs, start in viewer mode
+    } else {
+      setSelectedDocId(null);
+      setDocumentText(demoDocText());
+    }
+  }, []);
+
+  // Persist docs whenever docs changes
+  useEffect(() => {
+    // Only persist after initial mount (docs state exists anyway, safe to always call)
+    saveDocs(docs);
+  }, [docs]);
+
+  const selectedTitle = useMemo(() => {
+    const d = docs.find((x) => x.id === selectedDocId);
+    return d?.title ?? "none";
+  }, [docs, selectedDocId]);
+
+  // --- Handlers ---
+  function onLoadDemo() {
+    setDocumentText(demoDocText());
+    setSelectedDocId(null);
+    setActiveCitation(null);
+    setResp(null);
+    setError(null);
+    setEditMode(true);
+  }
+
+  function onSaveNewDoc(title: string) {
+    const t = (title ?? "").trim() || "Untitled doc";
+    const newDoc: SavedDoc = {
+      id: makeId(),
+      title: t,
+      text: documentText,
+      createdAt: Date.now(),
+    };
+
+    setDocs((prev) => [newDoc, ...prev]);
+    setSelectedDocId(newDoc.id);
+    setEditMode(false);
+  }
+
+  function onSelectDoc(id: string) {
+    const d = docs.find((x) => x.id === id);
+    if (!d) return;
+
+    setSelectedDocId(d.id);
+    setDocumentText(d.text);
+    setActiveCitation(null);
+    setResp(null);
+    setError(null);
+    setEditMode(false);
+  }
+
+  function onDeleteSelected() {
+    if (!selectedDocId) return;
+
+    setDocs((prev) => prev.filter((d) => d.id !== selectedDocId));
+
+    // After deletion: select next available doc, else revert to demo
+    const remaining = docs.filter((d) => d.id !== selectedDocId);
+    if (remaining.length > 0) {
+      setSelectedDocId(remaining[0].id);
+      setDocumentText(remaining[0].text);
+      setEditMode(false);
+    } else {
+      setSelectedDocId(null);
+      setDocumentText(demoDocText());
+      setEditMode(true);
+    }
+
+    setActiveCitation(null);
+    setResp(null);
+    setError(null);
+  }
+
+  function onChangeDocumentText(t: string) {
+    setDocumentText(t);
+
+    // Optional: if currently viewing a saved doc, keep that doc synced as you edit.
+    // This makes "Edit saved doc" behave intuitively.
+    if (!selectedDocId) return;
+    setDocs((prev) =>
+      prev.map((d) => (d.id === selectedDocId ? { ...d, text: t } : d))
+    );
+  }
 
   async function onAsk() {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setLoading(true);
     setError(null);
     setResp(null);
+    setActiveCitation(null);
 
     try {
-      const r = await fetch(`${apiUrl}/ask`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, document_text: documentText }),
-      });
-
-      if (!r.ok) {
-        const t = await r.text();
-        throw new Error(`API error ${r.status}: ${t}`);
-      }
-
-      const data = (await r.json()) as AskResponse;
+      const data = await ask({ question, document_text: documentText }, { signal: controller.signal});
       setResp(data);
     } catch (e: any) {
+      if (e?.name == "AbortError") return;
       setError(e?.message ?? "Unknown error");
     } finally {
       setLoading(false);
     }
   }
 
-  function loadDemoDoc() {
-    setDocumentText(
-      `TrustCite Demo Doc\n\n` +
-        `This system answers questions only using the provided document.\n` +
-        `If it cannot find evidence, it will abstain.\n\n` +
-        `Vancouver is a coastal city in British Columbia. It is known for its film industry.`
-    );
-  }
-
-  function jumpToSpan(start: number, end: number) {
-    const el = textareaRef.current;
-    if (!el) return;
-    el.focus();
-    el.setSelectionRange(start, end);
-    // crude but works: scroll by estimating line height
-    // (good enough for Day 3)
+  function onPickCitation(c: Citation) {
+    setActiveCitation(c);
+    // viewer mode makes the highlight "wow"
+    setEditMode(false);
   }
 
   return (
-    <main className="min-h-screen p-6">
-      <div className="mx-auto max-w-6xl">
-        <h1 className="text-3xl font-semibold tracking-tight">TrustCite</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Trustworthy long-document QA with per-sentence citations with abstain and trace.
-        </p>
+    <main className="min-h-screen bg-transparent text-white">
+      <Background />
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-          {/* Left: document */}
-          <section className="border rounded-xl p-4">
-            <div className="flex items-center justify-between">
-              <h2 className="font-medium">Document</h2>
-              <button
-                onClick={loadDemoDoc}
-                className="text-sm px-3 py-1 rounded-lg border hover:bg-gray-50"
-              >
-                Load demo document
-              </button>
+      <div className="mx-auto max-w-6xl px-6 py-10">
+        {/* Header */}
+        <div className="flex flex-col gap-6 sm:flex-row sm:items-end sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-3">
+              <h1 className="text-3xl font-semibold tracking-tight">TrustCite</h1>
             </div>
-            <textarea
-              ref={textareaRef}
-              value={documentText}
-              onChange={(e) => setDocumentText(e.target.value)}
-              className="mt-3 w-full h-[420px] border rounded-lg p-3 text-sm font-mono"
-            />
-          </section>
 
-          {/* Right: ask */}
-          <section className="border rounded-xl p-4">
-            <h2 className="font-medium">Ask</h2>
+            <p className="mt-2 max-w-2xl text-sm text-white/60">
+              Trustworthy long-document QA with per-sentence citations, abstain, and trace.
+            </p>
 
-            <label className="block mt-3 text-sm">Question</label>
-            <input
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              className="mt-1 w-full border rounded-lg p-2 text-sm"
-            />
+            <div className="mt-3 flex flex-wrap items-center gap-3 text-xs text-white/55">
+              <span className="inline-flex items-center gap-2">
+                <span className="h-1.5 w-1.5 rounded-full bg-white/30" />
+                <span>Active doc:</span>
+                <span className="text-white/80 font-medium">{selectedTitle}</span>
+              </span>
 
-            <button
-              onClick={onAsk}
-              disabled={loading}
-              className="mt-3 w-full rounded-lg bg-black text-white py-2 text-sm disabled:opacity-60"
-            >
-              {loading ? "Asking..." : "Ask with citations"}
-            </button>
+              <span className="text-white/30">•</span>
 
-            {error && (
-              <div className="mt-3 text-sm text-red-600 border border-red-200 bg-red-50 p-2 rounded-lg">
-                {error}
-              </div>
-            )}
-
-            {resp && (
-              <div className="mt-4 border rounded-xl p-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-medium">Final answer</h3>
-                  <div className="text-xs text-gray-500 flex items-center gap-2">
-                    <span>{resp.abstained ? "abstained" : "answered"} · {resp.trace.timings_ms?.total ?? "?"}ms</span>
-                    {resp.trace.fallback_used && (
-                      <span className="px-2 py-0.5 rounded-full border text-[11px]">fallback</span>
-                    )}
-                    {(resp.trace.dropped_sentences ?? 0) > 0 && (
-                      <span className="px-2 py-0.5 rounded-full border text-[11px]">
-                        dropped {resp.trace.dropped_sentences}
-                      </span>
-                    )}
-                    {(resp.trace.sanitized?.question || resp.trace.sanitized?.document) && (
-                      <span className="px-2 py-0.5 rounded-full border text-[11px]">sanitized</span>
-                    )}
-                  </div>
-                </div>
-
-                {resp.abstained ? (
-                  <p className="mt-2 text-sm text-gray-600">
-                    Not enough evidence above the retrieval threshold.
-                  </p>
-                ) : (
-                  <div className="mt-2 space-y-2">
-                    {resp.answer.map((a, i) => (
-                      <div key={i} className="text-sm leading-relaxed">
-                        <span>{a.sentence}</span>
-                        <span className="ml-2 inline-flex gap-1">
-                          {a.citations.map((c, j) => (
-                            <button
-                              key={j}
-                              onClick={() => jumpToSpan(c.start, c.end)}
-                              className="text-xs px-2 py-0.5 rounded-full border hover:bg-gray-50 font-mono"
-                              title={`Jump to ${c.chunk_id} [${c.start}, ${c.end})`}
-                            >
-                              {c.chunk_id}
-                            </button>
-                          ))}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            <div className="mt-4">
-              <h3 className="text-sm font-medium">Response</h3>
-              <pre className="mt-2 text-xs bg-gray-50 border rounded-lg p-3 overflow-auto h-[360px]">
-                {pretty || "No response yet."}
-              </pre>
-
-              {resp && (
-                <div className="mt-4">
-                  <h3 className="text-sm font-medium">Retrieved evidence (top chunks)</h3>
-                  <div className="mt-2 space-y-2">
-                    {resp.trace.chunks_preview.map((c) => (
-                      <div key={c.chunk_id} className="border rounded-lg p-2 text-xs">
-                        <div className="flex items-center justify-between">
-                          <span className="font-mono">{c.chunk_id}</span>
-                          <span className="tabular-nums">score: {c.score.toFixed(3)}</span>
-                        </div>
-                        <div className="mt-1 text-[11px] text-gray-600">
-                          chars [{c.start}, {c.end})
-                        </div>
-                        <pre className="mt-2 whitespace-pre-wrap">{c.text}</pre>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              
+              <span>
+                Mode: <span className="text-white/80 font-medium">{editMode ? "Edit" : "Viewer"}</span>
+              </span>
             </div>
-          </section>
+
+          </div>
+
+        </div>
+
+        {/* Main grid */}
+        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+          {/* LEFT */}
+          <div className="space-y-6">
+            <DocPanel
+              docs={docs}
+              selectedDocId={selectedDocId}
+              documentText={documentText}
+              editMode={editMode}
+              setEditMode={setEditMode}
+              onChangeDocumentText={onChangeDocumentText}
+              onSaveNewDoc={onSaveNewDoc}
+              onSelectDoc={onSelectDoc}
+              onDeleteSelected={onDeleteSelected}
+              onLoadDemo={onLoadDemo}
+            />
+
+            {!editMode && <DocViewer text={documentText} active={activeCitation} />}
+          </div>
+
+          {/* RIGHT */}
+          <div className="space-y-6">
+            <AskPanel
+              question={question}
+              setQuestion={setQuestion}
+              loading={loading}
+              onAsk={onAsk}
+            />
+
+            <AnswerPanel
+              resp={resp}
+              loading={loading}
+              error={error}
+              onPickCitation={onPickCitation}
+            />
+
+            <InspectRunPanel resp={resp} />
+          </div>
+        </div>
+
+        {/* Footer (tiny, premium) */}
+        <div className="mt-10 text-xs text-white/35">
+          TrustCite — answers are grounded in the provided document; otherwise the system abstains.
         </div>
       </div>
     </main>
   );
+
 }

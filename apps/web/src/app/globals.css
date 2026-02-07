@@ -1,8 +1,18 @@
 @import "tailwindcss";
 
+/* ---------- Theme tokens (keep yours, just refined) ---------- */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Default to dark-first since your app is dark */
+  --background: #05070f;
+  --foreground: rgba(255, 255, 255, 0.92);
+
+  /* Subtle UI colors */
+  --muted: rgba(255, 255, 255, 0.62);
+  --muted-2: rgba(255, 255, 255, 0.40);
+  --border: rgba(255, 255, 255, 0.10);
+
+  /* Accent used for selection/focus (OpenAI-ish blue) */
+  --accent: rgba(80, 180, 255, 0.55);
 }
 
 @theme inline {
@@ -12,15 +22,93 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
+/* Optional: if you ever want a true light mode later */
+@media (prefers-color-scheme: light) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #ffffff;
+    --foreground: #0b0e14;
+    --muted: rgba(11, 14, 20, 0.70);
+    --muted-2: rgba(11, 14, 20, 0.50);
+    --border: rgba(11, 14, 20, 0.12);
+    --accent: rgba(20, 110, 255, 0.35);
   }
+}
+
+/* ---------- Global baseline (this is the “elite” feel) ---------- */
+html {
+  /* Better text rendering everywhere */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+
+  /* Prevent iOS tap highlight */
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+
+  /* Use Geist if present; otherwise a premium system stack */
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+/* Subtle selection (feels premium) */
+::selection {
+  background: rgba(80, 180, 255, 0.22);
+}
+
+/* Links should be understated by default (avoid “blue web page” look) */
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Better focus behavior (still accessible) */
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 2px solid rgba(80, 180, 255, 0.30);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+
+/* Make form controls inherit fonts */
+input,
+button,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+/* Optional but very “company UI”: consistent scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.26);
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }

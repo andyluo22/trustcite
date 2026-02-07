@@ -1,0 +1,30 @@
+name: eval
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install API deps
+        working-directory: apps/api
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install requests
+
+      - name: Run API (background)
+        working-directory: apps/api
+        run: |
+          nohup uvicorn main:app --host 127.0.0.1 --port 8000 &
+
+      - name: Run eval
+        run: python apps/api/eval/run_eval.py

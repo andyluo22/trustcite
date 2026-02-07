@@ -20,10 +20,22 @@ _INJECTION_PATTERNS = [
 
 _PAT_RE = re.compile("|".join(f"({p})" for p in _INJECTION_PATTERNS), flags=re.IGNORECASE)
 
+def looks_like_prompt_injection(text: str) -> bool:
+    t = text.lower()
+    needles = [
+        "ignore previous instructions",
+        "system prompt",
+        "developer message",
+        "you are chatgpt",
+        "do anything now",
+    ]
+    return any(n in t for n in needles)
+
 @dataclass(frozen=True)
 class Sanitized:
     text: str
     changed: bool
+
 
 def sanitize_question(q: str) -> Sanitized:
     original = q or ""

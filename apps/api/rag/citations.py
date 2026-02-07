@@ -61,6 +61,13 @@ def enforce_citations(generated_text: str, *, chunks_by_id: Dict[str, Chunk]) ->
     out: List[Tuple[str, List[Tuple[str,int,int]]]] = []
 
     for sent in split_sentences(generated_text):
+        sent = sent.strip()
+        # require citations to appear at the end of the sentence
+        # e.g. "... blah blah [c0001, c0002]"
+        if not re.search(r"\[[^\]]+\]\s*$", sent):
+            continue
+
+
         parsed = parse_sentence_citations(sent)
         if not parsed.cited_chunk_ids:
             continue
